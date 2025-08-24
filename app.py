@@ -1,6 +1,59 @@
-import os
-import streamlit as st
 from feedback import feedback_for_labels
+
+import os, requests, streamlit as st
+
+def detect_token_source():
+    keys = [
+        ("env:HF_API_TOKEN", os.getenv("HF_API_TOKEN")),
+        ("env:HUGGINGFACE_API_TOKEN", os.getenv("HUGGINGFACE_API_TOKEN")),
+        ("env:HUGGINGFACEHUB_API_TOKEN", os.getenv("HUGGINGFACEHUB_API_TOKEN")),
+    ]
+    # also check st.secrets
+    try:
+        keys += [
+            ("secrets:HF_API_TOKEN", st.secrets.get("HF_API_TOKEN")),
+            ("secrets:HUGGINGFACE_API_TOKEN", st.secrets.get("HUGGINGFACE_API_TOKEN")),
+            ("secrets:HUGGINGFACEHUB_API_TOKEN", st.secrets.get("HUGGINGFACEHUB_API_TOKEN")),
+        ]
+    except Exception:
+        pass
+    found = [(k, v) for k, v in keys if v and str(v).strip()]
+    if not found:
+        return "No token detected"
+    k, v = found[0]
+    v = str(v).strip()
+    masked = (v[:4] + "..." + v[-4:]) if len(v) >= 12 else "****"
+    return f"Detected {k} = {masked}"
+
+def try_plain_request():
+    # minimal GET ping (public) and POST (auth)
+    token = (
+        os.getenv("HF_API_TOKEN")
+        or os.getenv("HUGGINGFACE_API_TOKEN")
+        or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+        or (st.secrets.get("HF_API_TOKEN") if "HF_API_TOKEN" in st.secrets else None)
+        or (st.secrets.get("HUGGINGFACEHUB_API_TOKEN") if "HUGGINGFACEHUB_API_TOKEN" in st.secrets else None)
+    )
+    if not token or not str(token).strip():
+        return "No token to test"
+    token = str(token).strip()
+    headers = {"Authorization": f"Bearer {token}"}
+    # tiny auth-required call
+    try:
+        r = requests.post(
+            "https://api-inference.huggingface.co/models/distilbert-base-uncased-finetuned-sst-2-english",
+            headers=headers,
+            json={"inputs": "hello"},
+            timeout=15,
+        )
+        return f"HF POST status={r.status_code}"
+    except Exception as e:
+        return f"HF POST error: {e}"
+
+with st.expander("Diagnostics (temporary)"):
+    st.write(detect_token_source())
+    st.write(try_plain_request())
+# --- /TEMP DIAGNOSTICS ---
 
 def _has_hf_token() -> bool:
     if os.getenv("HF_API_TOKEN"):
