@@ -1,40 +1,50 @@
+# detectors.py  — API-backed, no local model loads
+import os
+import requests
+from typing import List, Dict, Any
 
-from transformers import pipeline
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")  # set in Streamlit secrets at deploy time
+HF_API_URL = "https://api-inference.huggingface.co/models"
 
-LABELS = ["Safe behavior", "Risky behavior", "Respectful", "Disrespectful"]
+HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"} if HF_API_TOKEN else {}
 
-def get_zero_shot_clf():
-    # zero-shot classifier (small, widely used)
-    return pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+def _hf_post(model: str, payload: Dict[str, Any]) -> Any:
+    url = f"{HF_API_URL}/{model}"
+    r = requests.post(url, headers=HEADERS, json=payload, timeout=30)
+    r.raise_for_status()
+    return r.json()
 
-def get_toxicity_clf():
-    return pipeline("text-classification", model="unitary/toxic-bert", return_all_scores=True)
+def classify_sentiment(text: str) -> Dict[str, Any]:
+    """Binary sentiment, fast & small."""
+    model = "distilbert-base-uncased-finetuned-sst-2-english"
+    out = _hf_post(model, {"inputs": text})
+    # API returns list of list of {label, score}
+    pred = out[0][0] if isinstance(out, list) and out and isinstance(out[0], list) else {"label":"NEUTRAL","score":0.0}
+    return {"model": model, "label": pred["label"], "score": float(pred["score"])}
 
-def zero_shot_labels(text, clf):
-    out = clf(text, candidate_labels=LABELS, multi_label=True)
-    return dict(zip(out["labels"], out["scores"]))
+def classify_toxicity(text: str) -> Dict[str, Any]:
+    """Toxic content detection."""
+    model = "unitary/toxic-bert"
+    out = _hf_post(model, {"inputs": text})
+    # returns list of list of {label, score}
+    labels = {d["label"]: float(d["score"]) for d in out[0]}
+    toxic_score = max(labels.values()) if labels else 0.0
+    return {"model": model, "scores": labels, "toxic_score": toxic_score}
 
-def toxicity_score(text):
-    tox = get_toxicity_clf()
-    scores = tox(text)[0]  # list of dicts
-    for s in scores:
-        if s['label'].lower() == 'toxic':
-            return float(s['score'])
-    return max(s['score'] for s in scores)
+def classify_hate(text: str) -> Dict[str, Any]:
+    """Hate/offensive detection."""
+    model = "Hate-speech-CNERG/bert-base-uncased-hatexplain"
+    out = _hf_post(model, {"inputs": text})
+    # normalize response into a top label/score
+    pred = out[0][0] if isinstance(out, list) and out and isinstance(out[0], list) else {"label":"SAFE","score":0.0}
+    return {"model": model, "label": pred["label"], "score": float(pred["score"])}
 
-def scam_score(text):
-    scam_clf = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-    labels = ["Likely scam", "Likely legitimate"]
-    out = scam_clf(text, candidate_labels=labels)
-    idx = out["labels"].index("Likely scam")
-    return float(out["scores"][idx])
-
-def analyze_text(text, clf):
-    labels = zero_shot_labels(text, clf)
-    tox = toxicity_score(text)
-    scam = scam_score(text)
-    return {"labels": labels, "toxicity": tox, "scam": scam}
-
-def format_scores(d):
-    items = sorted(((k, v) for k, v in d.items()), key=lambda kv: -kv[1])
-    return {k: round(v, 3) for k, v in items}
+def zero_shot_claim_check(text: str, labels: List[str]) -> Dict[str, Any]:
+    """
+    Zero-shot classification to approximate 'misinformation' signals by label confidence.
+    Use a distilled MNLI model to keep latency/cost reasonable on HF.
+    """
+    model = "valhalla/distilbart-mnli-12-1"
+    out = _hf_post(model, {"inputs": text, "parameters": {"candidate_labels": labels}})
+    # structure: {labels: [...], scores: [...], sequence: "..."}
+    return {"model": model, **out}
