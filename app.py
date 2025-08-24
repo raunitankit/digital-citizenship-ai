@@ -1,13 +1,11 @@
 import os
-import requests
 import streamlit as st
-
 from feedback import feedback_for_labels
 from detectors import (
     zero_shot_claim_check,
     classify_toxicity,
-    classify_sentiment,  # optional
-    classify_hate,       # optional
+    classify_sentiment,  # optional (unused in UI but available)
+    classify_hate,       # optional (unused in UI but available)
 )
 
 # ----------------------- Page & Presets -----------------------
@@ -25,65 +23,24 @@ PRESETS = {
     "Scam": "Want to earn $2500 for 1 hour of work",
 }
 
-# ----------------------- Single diagnostics expander (temporary) -----------------------
-def _whoami() -> str:
-    tok = (
-        os.getenv("HF_API_TOKEN")
-        or os.getenv("HUGGINGFACEHUB_API_TOKEN")
-        or (st.secrets.get("HF_API_TOKEN") if "HF_API_TOKEN" in st.secrets else None)
-        or (st.secrets.get("HUGGINGFACEHUB_API_TOKEN") if "HUGGINGFACEHUB_API_TOKEN" in st.secrets else None)
-    )
-    if not tok:
-        return "whoami: no token detected"
-    tok = str(tok).strip().strip('"').strip("'")
-    try:
-        r = requests.get(
-            "https://huggingface.co/api/whoami-v2",
-            headers={"Authorization": f"Bearer {tok}"},
-            timeout=15,
-        )
-        return f"whoami-v2: {r.status_code} {r.text[:120]}..."
-    except Exception as e:
-        return f"whoami error: {e}"
-
-def _probe_inference() -> str:
-    tok = (
-        os.getenv("HF_API_TOKEN")
-        or os.getenv("HUGGINGFACEHUB_API_TOKEN")
-        or (st.secrets.get("HF_API_TOKEN") if "HF_API_TOKEN" in st.secrets else None)
-        or (st.secrets.get("HUGGINGFACEHUB_API_TOKEN") if "HUGGINGFACEHUB_API_TOKEN" in st.secrets else None)
-    )
-    headers = {"Authorization": f"Bearer {str(tok).strip().strip('\"').strip(\"'\") }"} if tok else {}
-    try:
-        r = requests.post(
-            "https://api-inference.huggingface.co/models/facebook/bart-large-mnli",
-            headers=headers,
-            json={"inputs": "hello", "parameters": {"candidate_labels": ["a", "b"]}},
-            timeout=20,
-        )
-        return f"inference probe: status={r.status_code}, body={r.text[:140]}"
-    except Exception as e:
-        return f"inference probe error: {e}"
-
-with st.expander("Diagnostics (temporary)"):
-    st.write(_whoami())
-    st.write(_probe_inference())
-
-# ----------------------- Helpful token warning -----------------------
+# Optional helper: gentle reminder if token missing (doesn't block usage)
 def _has_hf_token() -> bool:
-    if os.getenv("HF_API_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN"):
-        return True
     try:
-        return bool(st.secrets.get("HF_API_TOKEN") or st.secrets.get("HUGGINGFACEHUB_API_TOKEN"))
+        return bool(
+            os.getenv("HF_API_TOKEN")
+            or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+            or st.secrets.get("HF_API_TOKEN")
+            or st.secrets.get("HUGGINGFACEHUB_API_TOKEN")
+        )
     except Exception:
         return False
 
 if not _has_hf_token():
     st.warning(
-        "HF_API_TOKEN is not set. In Streamlit Cloud, go to **App → Settings → Secrets** and add:\n\n"
+        "HF_API_TOKEN is not set. Add it in **Streamlit → App → Settings → Secrets** to avoid rate limits:\n\n"
         "HF_API_TOKEN = \"hf_...\"\n"
         "HUGGINGFACEHUB_API_TOKEN = \"hf_...\"\n\n"
-        "Then **Clear cache and reboot** the app. Without a token, the Inference API may fail or be rate-limited.",
+        "Then **Clear cache and reboot** the app.",
         icon="⚠️",
     )
 
@@ -140,7 +97,7 @@ if analyze_btn and user_text.strip():
         results = {}
         errors = []
 
-        # 1) Zero-shot (multi-label)
+        # 1) Zero-shot (multi-label) → Safe/Respectful/Risky/Disrespectful/Scam
         try:
             zs = zero_shot_claim_check(user_text, CANDIDATE_LABELS)
             raw_labels = zs.get("labels", [])
@@ -154,7 +111,7 @@ if analyze_btn and user_text.strip():
 
         # 2) Toxicity
         try:
-            tox = classify_toxicity(user_text)
+            tox = classify_toxicity(user_text)  # {"model":..., "scores":{...}, "toxic_score": float}
             results["toxicity"] = float(tox.get("toxic_score", 0.0))
         except Exception as e:
             errors.append(f"Toxicity classification failed: {e}")
