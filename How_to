@@ -1,0 +1,42 @@
+app.py — Streamlit UI for the AI detector
+
+detectors.py — AI helpers (zero‑shot labels, toxicity, scam)
+
+feedback.py — Friendly feedback templates
+
+docs/teacher_guide.md — Lesson plan + assessments
+
+docs/student_handout.md — Step‑by‑step student guide
+
+data/sample_inputs.txt — Sample messages to test
+
+requirements.txt — Dependencies
+
+README.md — Setup and teaching flow
+
+
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run app.py
+
+
+Samples - 
+
+Good - I only accept requests from people I actually know.
+
+bad
+You’re such a loser.
+Offering $2500 for 1 hour
+
+
+Gray area - AI assists; humans decide
+Relax, it’s just a joke. Everyone shares stuff.
+
+
+
+Add presets later - Ankit
+choice = st.selectbox("Try a preset (or choose 'Custom'):", ["Custom"] + list(PRESETS.keys()))
+if choice != "Custom":
+    user_text = PRESETS[choice]
+else:
+    user_text = st.text_area("Your text:", placeholder="Write how you would respond if a stranger sent you a friend request...")
