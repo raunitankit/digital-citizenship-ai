@@ -23,11 +23,13 @@ PRESETS = {
     "Scam": "Want to earn $2500 for 1 hour of work",
 }
 
-# Keep the user's text in session state so buttons/presets can update it cleanly
+# ----------------------- Session state -----------------------
 if "user_text" not in st.session_state:
     st.session_state.user_text = ""
+if "preset_sel" not in st.session_state:
+    st.session_state.preset_sel = "(none)"
 
-# Optional helper: gentle reminder if token missing (doesn't block usage)
+# ----------------------- Helper: token warning -----------------------
 def _has_hf_token() -> bool:
     try:
         return bool(
@@ -48,6 +50,17 @@ if not _has_hf_token():
         icon="⚠️",
     )
 
+# ----------------------- Callbacks -----------------------
+def apply_demo_text():
+    st.session_state.user_text = "I wouldn't accept the request. I only connect with people I know."
+    # No st.rerun() needed; button triggers a rerun automatically.
+
+def apply_preset():
+    sel = st.session_state.preset_sel
+    if sel and sel in PRESETS:
+        st.session_state.user_text = PRESETS[sel]
+    # selectbox on_change triggers rerun automatically.
+
 # ----------------------- UI -----------------------
 st.title("🛡️ Digital Citizenship Detector — AI Edition")
 st.write(
@@ -60,38 +73,33 @@ Then you'll see a **friendly feedback** message.
 """
 )
 
-# --- Text input (bound to session state) ---
-user_text = st.text_area(
+# Text input (bound to session state)
+st.text_area(
     "Your text:",
-    key="user_text",  # binds to st.session_state.user_text
+    key="user_text",
     placeholder="Write how you would respond if a stranger sent you a friend request...",
     height=160,
 )
 
 with st.expander("Try a preset"):
-    preset_key = st.selectbox("Pick an example", ["(none)"] + list(PRESETS.keys()))
-    if preset_key and preset_key != "(none)":
-        st.session_state.user_text = PRESETS[preset_key]
-        st.rerun()  # refresh UI with the new text
+    st.selectbox(
+        "Pick an example",
+        ["(none)"] + list(PRESETS.keys()),
+        key="preset_sel",
+        on_change=apply_preset,
+    )
 
 cols = st.columns(2)
 with cols[0]:
     analyze_btn = st.button("Analyze", use_container_width=True)
 with cols[1]:
-    demo_btn = st.button("Use demo text", use_container_width=True)
-
-if demo_btn:
-    st.session_state.user_text = "I wouldn't accept the request. I only connect with people I know."
-    st.rerun()
+    demo_btn = st.button("Use demo text", use_container_width=True, on_click=apply_demo_text)
 
 # ----------------------- Helpers -----------------------
 DISPLAY_LABELS = ["Safe", "Respectful", "Risky", "Disrespectful", "Scam"]
 CANDIDATE_LABELS = [l.lower() for l in DISPLAY_LABELS]  # what we send to the HF API
 
 def format_scores(scores_dict):
-    """
-    Pretty-print a dict of label -> score (0..1) sorted by score desc.
-    """
     if not scores_dict:
         return "No scores."
     items = sorted(scores_dict.items(), key=lambda kv: kv[1], reverse=True)
@@ -110,11 +118,9 @@ if analyze_btn and st.session_state.user_text.strip():
         # 1) Zero-shot (multi-label) → Safe/Respectful/Risky/Disrespectful/Scam
         try:
             zs = zero_shot_claim_check(text, CANDIDATE_LABELS)
-            # Expected: {"model": ..., "labels": [...], "scores": [...], "sequence": "..."}
             raw_labels = zs.get("labels", [])
             raw_scores = zs.get("scores", [])
             label_scores = {lbl: float(scr) for lbl, scr in zip(raw_labels, raw_scores)}
-            # Remap back to Title Case for display
             display_scores = {lbl.title(): label_scores.get(lbl, 0.0) for lbl in CANDIDATE_LABELS}
             results["labels"] = display_scores
         except Exception as e:
@@ -132,20 +138,16 @@ if analyze_btn and st.session_state.user_text.strip():
     # ----------------------- Show Results -----------------------
     st.subheader("Results")
 
-    # Digital Behavior Labels
     st.markdown("**Digital Behavior Labels**")
     st.markdown(format_scores(results.get("labels", {})))
 
-    # Metrics row
     c1, c2 = st.columns(2)
     with c1:
         st.metric("Toxicity", f"{results.get('toxicity', 0.0):.3f}")
     with c2:
-        # Extract scam likelihood (title-case key)
         scam_score = results.get("labels", {}).get("Scam", 0.0)
         st.metric("Scam likelihood", f"{scam_score:.3f}")
 
-    # Feedback
     st.subheader("Feedback")
     try:
         fb = feedback_for_labels(results.get("labels", {}))
