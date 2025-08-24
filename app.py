@@ -2,6 +2,22 @@ import os
 import streamlit as st
 from feedback import feedback_for_labels
 
+def _has_hf_token() -> bool:
+    if os.getenv("HF_API_TOKEN"):
+        return True
+    try:
+        return bool(st.secrets.get("HF_API_TOKEN"))
+    except Exception:
+        return False
+
+if not _has_hf_token():
+    st.warning(
+        "HF_API_TOKEN is not set. In Streamlit Cloud, go to **App → Settings → Secrets** and add:\n\n"
+        "HF_API_TOKEN = \"hf_...\"\n\n"
+        "Then reboot the app.",
+        icon="⚠️",
+    )
+
 # API-backed detectors (no local torch/transformers)
 from detectors import (
     zero_shot_claim_check,
