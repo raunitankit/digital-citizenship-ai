@@ -1,6 +1,17 @@
 from feedback import feedback_for_labels
-
 import os, requests, streamlit as st
+
+def whoami():
+    tok = (os.getenv("HF_API_TOKEN") or st.secrets.get("HF_API_TOKEN") or
+           os.getenv("HUGGINGFACEHUB_API_TOKEN") or st.secrets.get("HUGGINGFACEHUB_API_TOKEN"))
+    if not tok: return "No token detected"
+    tok = str(tok).strip().strip('"').strip("'")
+    r = requests.get("https://huggingface.co/api/whoami-v2",
+                     headers={"Authorization": f"Bearer {tok}"}, timeout=15)
+    return f"whoami-v2: {r.status_code} {r.text[:120]}..."
+with st.expander("Diagnostics (temporary)"):
+    st.write(whoami())
+
 
 def detect_token_source():
     keys = [
