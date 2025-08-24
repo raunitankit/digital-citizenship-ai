@@ -1,167 +1,271 @@
-import os
-import streamlit as st
-from feedback import feedback_for_labels
-from detectors import (
-    zero_shot_claim_check,
-    classify_toxicity,
-    classify_sentiment,  # optional (unused in UI but available)
-    classify_hate,       # optional (unused in UI but available)
-)
+"use client";
 
-# ----------------------- Page & Presets -----------------------
-st.set_page_config(
-    page_title="Digital Citizenship Detector (AI Edition)",
-    page_icon="🛡️",
-    layout="centered",
-)
+import { useEffect, useRef, useState } from "react";
+import BackHeader from "@/components/BackHeader";
 
-PRESETS = {
-    "Safe – Stranger request": "I only accept requests from people I actually know.",
-    "Respectful – Don’t share": "Let’s not share that photo—it could hurt their feelings.",
-    "Borderline – Just a joke": "Relax, it’s just a joke. Everyone shares stuff.",
-    "Toxic": "You're such a loser.",
-    "Scam": "Want to earn $2500 for 1 hour of work",
-}
+// Your Streamlit URL (or set NEXT_PUBLIC_DC_URL in Vercel)
+const TARGET =
+  process.env.NEXT_PUBLIC_DC_URL ||
+  "https://digital-citizenship-ai-auehbputrz3jyadpcnnukp.streamlit.app/";
 
-# ----------------------- Session state -----------------------
-if "user_text" not in st.session_state:
-    st.session_state.user_text = ""
-if "preset_sel" not in st.session_state:
-    st.session_state.preset_sel = "(none)"
+type PingResp = { ok: boolean; status: number; error?: string };
 
-# ----------------------- Helper: token warning -----------------------
-def _has_hf_token() -> bool:
-    try:
-        return bool(
-            os.getenv("HF_API_TOKEN")
-            or os.getenv("HUGGINGFACEHUB_API_TOKEN")
-            or (st.secrets.get("HF_API_TOKEN") if "HF_API_TOKEN" in st.secrets else None)
-            or (st.secrets.get("HUGGINGFACEHUB_API_TOKEN") if "HUGGINGFACEHUB_API_TOKEN" in st.secrets else None)
-        )
-    except Exception:
-        return False
-
-if not _has_hf_token():
-    st.warning(
-        "HF_API_TOKEN is not set. Add it in **Streamlit → App → Settings → Secrets** to avoid rate limits:\n\n"
-        "HF_API_TOKEN = \"hf_...\"\n"
-        "HUGGINGFACEHUB_API_TOKEN = \"hf_...\"\n\n"
-        "Then **Clear cache and reboot** the app.",
-        icon="⚠️",
-    )
-
-# ----------------------- Callbacks -----------------------
-def apply_demo_text():
-    st.session_state.user_text = "I wouldn't accept the request. I only connect with people I know."
-    # No st.rerun() needed; button triggers a rerun automatically.
-
-def apply_preset():
-    sel = st.session_state.preset_sel
-    if sel and sel in PRESETS:
-        st.session_state.user_text = PRESETS[sel]
-    # selectbox on_change triggers rerun automatically.
-
-# ----------------------- UI -----------------------
-st.title("🛡️ Digital Citizenship Detector — AI Edition")
-st.write(
+st.markdown(
     """
-Paste a short answer or a chat/message. The AI will estimate:
-- **Digital behavior labels** (Safe / Respectful / Risky / Disrespectful / Scam)
-- **Toxicity score** (0→1)
-
-Then you'll see a **friendly feedback** message.
-"""
+    <div style="margin: 8px 0 14px; text-align: left;">
+      <a href="https://thinkpythonai.com" target="_self"
+         style="display:inline-block; background:#0f172a; color:white;
+                padding:10px 16px; border-radius:8px; font-weight:600;
+                text-decoration:none;">
+         🔙 Back to ThinkPythonAI
+      </a>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-# Text input (bound to session state)
-st.text_area(
-    "Your text:",
-    key="user_text",
-    placeholder="Write how you would respond if a stranger sent you a friend request...",
-    height=160,
-)
+export default function DigitalCitizenshipEmbed() {
+  const [awake, setAwake] = useState<boolean | null>(null);
+  const [blocked, setBlocked] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const loadTimer = useRef<number | null>(null);
 
-with st.expander("Try a preset"):
-    st.selectbox(
-        "Pick an example",
-        ["(none)"] + list(PRESETS.keys()),
-        key="preset_sel",
-        on_change=apply_preset,
-    )
+  async function ping(): Promise<PingResp> {
+    const r = await fetch(`/api/ping-external?url=${encodeURIComponent(TARGET)}`, {
+      cache: "no-store",
+    });
+    return (await r.json()) as PingResp;
+  }
 
-cols = st.columns(2)
-with cols[0]:
-    analyze_btn = st.button("Analyze", use_container_width=True)
-with cols[1]:
-    demo_btn = st.button("Use demo text", use_container_width=True, on_click=apply_demo_text)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await ping();
+        if (cancelled) return;
+        setAwake(!!res.ok);
+      } catch {
+        if (cancelled) return;
+        setAwake(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-# ----------------------- Helpers -----------------------
-DISPLAY_LABELS = ["Safe", "Respectful", "Risky", "Disrespectful", "Scam"]
-CANDIDATE_LABELS = [l.lower() for l in DISPLAY_LABELS]  # what we send to the HF API
+  // If iframe fails to load (e.g., X-Frame-Options DENY), onLoad never fires.
+  // Use a timeout as a heuristic and show a helpful fallback.
+  const handleFrameLoad = () => {
+    setLoading(false);
+    if (loadTimer.current) window.clearTimeout(loadTimer.current);
+    setBlocked(false);
+  };
 
-def format_scores(scores_dict):
-    if not scores_dict:
-        return "No scores."
-    items = sorted(scores_dict.items(), key=lambda kv: kv[1], reverse=True)
-    md_lines = ["| Label | Score |", "|---|---:|"]
-    for label, score in items:
-        md_lines.append(f"| {label} | {score:.3f} |")
-    return "\n".join(md_lines)
+  useEffect(() => {
+    if (awake === null) return; // still checking
+    // Start a timer; if onLoad doesn't fire in time, assume blocked.
+    setLoading(true);
+    setBlocked(false);
+    loadTimer.current = window.setTimeout(() => {
+      setLoading(false);
+      setBlocked(true);
+    }, 3500); // ~3.5s feels okay for cold starts
+    return () => {
+      if (loadTimer.current) window.clearTimeout(loadTimer.current);
+    };
+  }, [awake]);
 
-# ----------------------- Main Analyze -----------------------
-if analyze_btn and st.session_state.user_text.strip():
-    text = st.session_state.user_text
-    with st.spinner("Thinking..."):
-        results = {}
-        errors = []
+  return (
+    <main
+      style={{
+        minHeight: "85vh",
+        background: "linear-gradient(180deg,#f8fafc,#ffffff)",
+      }}
+    >
+      <div style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 16px 28px" }}>
+        {/* Top bar with back + open-in-tab */}
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 12,
+          }}
+        >
+          <BackHeader href="/" label="Back to ThinkPythonAI" />
 
-        # 1) Zero-shot (multi-label) → Safe/Respectful/Risky/Disrespectful/Scam
-        try:
-            zs = zero_shot_claim_check(text, CANDIDATE_LABELS)
-            raw_labels = zs.get("labels", [])
-            raw_scores = zs.get("scores", [])
-            label_scores = {lbl: float(scr) for lbl, scr in zip(raw_labels, raw_scores)}
-            display_scores = {lbl.title(): label_scores.get(lbl, 0.0) for lbl in CANDIDATE_LABELS}
-            results["labels"] = display_scores
-        except Exception as e:
-            errors.append(f"Zero-shot classification failed: {e}")
-            results["labels"] = {}
+          <a
+            href={TARGET}
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              background: "#0f172a",
+              color: "#fff",
+              textDecoration: "none",
+              padding: "9px 14px",
+              borderRadius: 10,
+              fontWeight: 700,
+            }}
+          >
+            Open full app ↗
+          </a>
+        </div>
 
-        # 2) Toxicity
-        try:
-            tox = classify_toxicity(text)  # {"model":..., "scores":{...}, "toxic_score": float}
-            results["toxicity"] = float(tox.get("toxic_score", 0.0))
-        except Exception as e:
-            errors.append(f"Toxicity classification failed: {e}")
-            results["toxicity"] = 0.0
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: "#0f172a" }}>
+          🛡️ Digital Citizenship Detector (Embedded)
+        </h1>
+        <p style={{ color: "#475569", marginTop: 6 }}>
+          This is the live Streamlit app embedded below. If your browser or the app blocks
+          embedding, use the “Open full app” button above.
+        </p>
 
-    # ----------------------- Show Results -----------------------
-    st.subheader("Results")
+        {/* Status strip */}
+        <div
+          style={{
+            marginTop: 14,
+            marginBottom: 10,
+            fontSize: 13,
+            color: awake === null ? "#64748b" : awake ? "#059669" : "#b91c1c",
+          }}
+        >
+          {awake === null && "Checking app status…"}
+          {awake === true && "App looks awake ✅"}
+          {awake === false && "The app may be waking up… trying to load ⚡"}
+        </div>
 
-    st.markdown("**Digital Behavior Labels**")
-    st.markdown(format_scores(results.get("labels", {})))
+        {/* Frame or fallback */}
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            height: "78vh",
+            border: "1px solid #e5e7eb",
+            borderRadius: 12,
+            overflow: "hidden",
+            background: "#fff",
+          }}
+        >
+          {/* Loading overlay */}
+          {loading && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "grid",
+                placeItems: "center",
+                background: "linear-gradient(180deg,#f1f5f9,rgba(255,255,255,0.8))",
+                zIndex: 1,
+              }}
+            >
+              <div style={{ textAlign: "center" }}>
+                <div
+                  style={{
+                    margin: "0 auto 10px",
+                    width: 44,
+                    height: 44,
+                    border: "3px solid #e2e8f0",
+                    borderTopColor: "#4f46e5",
+                    borderRadius: "50%",
+                    animation: "spin 0.9s linear infinite",
+                  }}
+                />
+                <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+                <div style={{ color: "#334155" }}>
+                  Loading the embedded app…
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                    If this takes too long, click “Open full app”.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("Toxicity", f"{results.get('toxicity', 0.0):.3f}")
-    with c2:
-        scam_score = results.get("labels", {}).get("Scam", 0.0)
-        st.metric("Scam likelihood", f"{scam_score:.3f}")
+          {/* IFRAME — may be blocked by X-Frame-Options on some deployments */}
+          <iframe
+            src={TARGET}
+            onLoad={handleFrameLoad}
+            // Don’t set sandbox unless you add all needed permissions; Streamlit needs scripts & same-origin.
+            style={{ width: "100%", height: "100%", border: "0" }}
+          />
 
-    st.subheader("Feedback")
-    try:
-        fb = feedback_for_labels(results.get("labels", {}))
-        st.success(fb)
-    except Exception as e:
-        st.info(
-            "Feedback module couldn't interpret the labels. "
-            "Please check `feedback_for_labels` to accept a dict of label→score.\n\n"
-            f"Error: {e}"
-        )
+          {/* Blocked fallback overlay */}
+          {blocked && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "grid",
+                placeItems: "center",
+                background: "linear-gradient(180deg,#fff,#f8fafc)",
+                padding: 20,
+                textAlign: "center",
+              }}
+            >
+              <div
+                style={{
+                  maxWidth: 520,
+                  background: "#ffffff",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 14,
+                  padding: 18,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.06)",
+                }}
+              >
+                <h2 style={{ fontSize: 18, fontWeight: 800, color: "#0f172a" }}>
+                  Embedding is blocked by the app/browser
+                </h2>
+                <p style={{ color: "#475569", marginTop: 8 }}>
+                  Some Streamlit apps disallow iframes (security setting). No worries—open
+                  it in a new tab and you’ll be right there.
+                </p>
+                <div style={{ marginTop: 12 }}>
+                  <a
+                    href={TARGET}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 8,
+                      background: "#4f46e5",
+                      color: "#fff",
+                      textDecoration: "none",
+                      padding: "10px 14px",
+                      borderRadius: 10,
+                      fontWeight: 700,
+                    }}
+                  >
+                    Open full app ↗
+                  </a>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
-    if errors:
-        with st.expander("Diagnostics (errors)"):
-            for er in errors:
-                st.write("•", er)
-
-st.caption("Note: These are estimates from hosted models; always apply human judgment.")
+        {/* Bottom back button */}
+        <div style={{ marginTop: 14, textAlign: "center" }}>
+          <a
+            href="/"
+            style={{
+              display: "inline-block",
+              background: "#0f172a",
+              color: "#fff",
+              textDecoration: "none",
+              padding: "10px 16px",
+              borderRadius: 10,
+              fontWeight: 700,
+            }}
+          >
+            🔙 Back to ThinkPythonAI
+          </a>
+        </div>
+      </div>
+    </main>
+  );
+}
